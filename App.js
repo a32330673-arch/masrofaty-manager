@@ -1,0 +1,721 @@
+import React, { useState, useEffect } from 'react';
+import {
+  StyleSheet, Text, View, TextInput, TouchableOpacity, FlatList,
+  Modal, Alert, SafeAreaView, StatusBar, ScrollView, ActivityIndicator
+} from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
+import { initializeApp } from 'firebase/app';
+import {
+  getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword,
+  onAuthStateChanged, signOut
+} from 'firebase/auth';
+import {
+  getFirestore, doc, setDoc, getDoc
+} from 'firebase/firestore';
+
+// مفاتيح الربط الخاصة بمشروعك على Firebase
+const firebaseConfig = {
+  apiKey: "AIzaSyDguCNV16AkNvdD9nV1_M2NjqK8770dIDc",
+  authDomain: "masrofaty-manager.firebaseapp.com",
+  projectId: "masrofaty-manager",
+  storageBucket: "masrofaty-manager.firebasestorage.app",
+  messagingSenderId: "106571768740",
+  appId: "1:106571768740:web:611d52b91c3d3a95a37731"
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [loadingAuth, setLoadingAuth] = useState(true);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [isRegister, setIsRegister] = useState(false);
+
+  // بيانات الدورة الحالية والأرشيف
+  const [currentCycle, setCurrentCycle] = useState(null);
+  const [archives, setArchives] = useState([]);
+  const [syncStatus, setSyncStatus] = useState('متصل بالسحابة');
+
+  // النوافذ المنبثقة (Modals)
+  const [cycleModalVisible, setCycleModalVisible] = useState(false);
+  const [expenseModalVisible, setExpenseModalVisible] = useState(false);
+  const [addFundsModalVisible, setAddFundsModalVisible] = useState(false);
+  const [archiveModalVisible, setArchiveModalVisible] = useState(false);
+
+  // مدخلات النماذج
+  const [initialBudgetInput, setInitialBudgetInput] = useState('');
+  const [cycleTitleInput, setCycleTitleInput] = useState('');
+  const [extraFundsInput, setExtraFundsInput] = useState('');
+  const [extraFundsNote, setExtraFundsNote] = useState('');
+
+  // مدخلات إضافة / تعديل مصروف
+  const [editingExpenseId, setEditingExpenseId] = useState(null);
+  const [expenseAmount, setExpenseAmount] = useState('');
+  const [expenseDesc, setExpenseDesc] = useState('');
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      setUser(currentUser);
+      if (currentUser) {
+        await loadData(currentUser.uid);
+      }
+      setLoadingAuth(false);
+    });
+    return unsubscribe;
+  }, []);
+
+  // تحميل البيانات من الهاتف أولاً ثم المزامنة مع السحابة
+  const loadData = async (uid) => {
+    try {
+      const localData = await AsyncStorage.getItem(`wallet_data_${uid}`);
+      if (localData) {
+        const parsed = JSON.parse(localData);
+        setCurrentCycle(parsed.currentCycle || null);
+        setArchives(parsed.archives || []);
+      }
+      const docRef = doc(db, 'users', uid);
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists()) {
+        const cloudData = docSnap.data();
+        setCurrentCycle(cloudData.currentCycle || null);
+        setArchives(cloudData.archives || []);
+        await AsyncStorage.setItem(`wallet_data_${uid}`, JSON.stringify(cloudData));
+      }
+      setSyncStatus('متزامن مع السحابة');
+    } catch (e) {
+      setSyncStatus('وضع بدون إنترنت (محفوظ محلياً)');
+    }
+  };
+
+  // حفظ البيانات محلياً وفي Firebase
+  const saveData = async (newCycle, newArchives) => {
+    if (!user) return;
+    const payload = { currentCycle: newCycle, archives: newArchives, updatedAt: new Date().toISOString() };
+    setCurrentCycle(newCycle);
+    setArchives(newArchives);
+    await AsyncStorage.setItem(`wallet_data_${user.uid}`, JSON.stringify(payload));
+    try {
+      setSyncStatus('جاري المزامنة...');
+      await setDoc(doc(db, 'users', user.uid), payload);
+      setSyncStatus('متزامن مع السحابة');
+    } catch (e) {
+      setSyncStatus('محفوظ محلياً (سيتم الرفع عند توفر نت)');
+    }
+  };
+
+  const handleAuth = async () => {
+    if (!email.trim() || !password.trim()) {
+      Alert.alert('تنبيه', 'من فضلك اكتب البريد الإلكتروني وكلمة المرور');
+      return;
+    }
+    try {
+      if (isRegister) {
+        await createUserWithEmailAndPassword(auth, email.trim(), password);
+      } else {
+        await signInWithEmailAndPassword(auth, email.trim(), password);
+      }
+    } catch (error) {
+      Alert.alert('خطأ في الدخول', 'تأكد من صحة البريد الإلكتروني وكلمة المرور (6 أحرف على الأقل)');
+    }
+  };
+
+  const formatDate = (isoString) => {
+    const d = new Date(isoString);
+    return `${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear()} - ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
+  };
+
+  // بدء دورة جديدة
+  const startNewCycle = () => {
+    const budget = parseFloat(initialBudgetInput);
+    if (isNaN(budget) || budget <= 0) {
+      Alert.alert('تنبيه', 'اكتب مبلغ أساسي صحيح أكبر من الصفر');
+      return;
+    }
+    const newCycle = {
+      id: Date.now().toString(),
+      title: cycleTitleInput.trim() || `دورة ${new Date().getDate()}/${new Date().getMonth() + 1}`,
+      startDate: new Date().toISOString(),
+      totalBudget: budget,
+      transactions: []
+    };
+    saveData(newCycle, archives);
+    setInitialBudgetInput('');
+    setCycleTitleInput('');
+    setCycleModalVisible(false);
+  };
+
+  // تزويد الرصيد في منتصف الدورة
+  const handleAddFunds = () => {
+    const amount = parseFloat(extraFundsInput);
+    if (isNaN(amount) || amount <= 0) {
+      Alert.alert('تنبيه', 'اكتب مبلغ إضافي صحيح');
+      return;
+    }
+    const newTx = {
+      id: Date.now().toString(),
+      type: 'income',
+      amount: amount,
+      description: extraFundsNote.trim() || 'إضافة رصيد إضافي',
+      date: new Date().toISOString()
+    };
+    const updatedCycle = {
+      ...currentCycle,
+      totalBudget: currentCycle.totalBudget + amount,
+      transactions: [newTx, ...currentCycle.transactions]
+    };
+    saveData(updatedCycle, archives);
+    setExtraFundsInput('');
+    setExtraFundsNote('');
+    setAddFundsModalVisible(false);
+  };
+
+  // حفظ مصروف جديد أو تعديل مصروف حالي
+  const saveExpense = () => {
+    const amount = parseFloat(expenseAmount);
+    if (isNaN(amount) || amount <= 0) {
+      Alert.alert('تنبيه', 'اكتب مبلغ صحيح');
+      return;
+    }
+    if (!expenseDesc.trim()) {
+      Alert.alert('تنبيه', 'اكتب وصف للمصروف (مثلاً: مواصلات، غداء...)');
+      return;
+    }
+
+    let updatedTransactions;
+    if (editingExpenseId) {
+      updatedTransactions = currentCycle.transactions.map(t =>
+        t.id === editingExpenseId
+          ? { ...t, amount, description: expenseDesc.trim() }
+          : t
+      );
+    } else {
+      const newTx = {
+        id: Date.now().toString(),
+        type: 'expense',
+        amount,
+        description: expenseDesc.trim(),
+        date: new Date().toISOString()
+      };
+      updatedTransactions = [newTx, ...currentCycle.transactions];
+    }
+
+    saveData({ ...currentCycle, transactions: updatedTransactions }, archives);
+    setExpenseAmount('');
+    setExpenseDesc('');
+    setEditingExpenseId(null);
+    setExpenseModalVisible(false);
+  };
+
+  const openEditExpense = (item) => {
+    if (item.type === 'income') return;
+    setEditingExpenseId(item.id);
+    setExpenseAmount(item.amount.toString());
+    setExpenseDesc(item.description);
+    setExpenseModalVisible(true);
+  };
+
+  const deleteTransaction = (item) => {
+    Alert.alert('حذف العملية', 'هل أنت متأكد من حذف هذه العملية؟', [
+      { text: 'إلغاء', style: 'cancel' },
+      {
+        text: 'حذف',
+        style: 'destructive',
+        onPress: () => {
+          const newBudget = item.type === 'income'
+            ? currentCycle.totalBudget - item.amount
+            : currentCycle.totalBudget;
+          const filtered = currentCycle.transactions.filter(t => t.id !== item.id);
+          saveData({ ...currentCycle, totalBudget: newBudget, transactions: filtered }, archives);
+        }
+      }
+    ]);
+  };
+
+  // الحسابات المالية للدورة الحالية
+  const totalSpent = currentCycle
+    ? currentCycle.transactions.filter(t => t.type === 'expense').reduce((sum, t) => sum + t.amount, 0)
+    : 0;
+  const remaining = currentCycle ? currentCycle.totalBudget - totalSpent : 0;
+
+  // حساب متوسط الصرف اليومي
+  const daysPassed = currentCycle
+    ? Math.max(1, Math.ceil((new Date() - new Date(currentCycle.startDate)) / (1000 * 60 * 60 * 24)))
+    : 1;
+  const dailyAverage = (totalSpent / daysPassed).toFixed(1);
+
+  // إغلاق الدورة وأرشفتها
+  const closeAndArchiveCycle = () => {
+    Alert.alert(
+      'إنهاء وأرشفة الدورة',
+      'سيتم حفظ هذه الدورة في الأرشيف والبدء بدورة جديدة. هل أنت متأكد؟',
+      [
+        { text: 'إلغاء', style: 'cancel' },
+        {
+          text: 'نعم، أرشفة',
+          onPress: () => {
+            const archivedItem = {
+              ...currentCycle,
+              endDate: new Date().toISOString(),
+              totalSpent,
+              remaining
+            };
+            saveData(null, [archivedItem, ...archives]);
+          }
+        }
+      ]
+    );
+  };
+
+  // تصدير التقرير بصيغة PDF
+  const exportToPDF = async (cycleData) => {
+    if (!cycleData) return;
+    const spent = cycleData.transactions.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
+    const rem = cycleData.totalBudget - spent;
+
+    const rowsHtml = cycleData.transactions.map(t => `
+      <tr>
+        <td>${t.description} ${t.type === 'income' ? '(إضافة رصيد +)' : ''}</td>
+        <td style="color: ${t.type === 'income' ? '#059669' : '#DC2626'}; font-weight: bold;">
+          ${t.type === 'income' ? '+' : '-'}${t.amount} EGP
+        </td>
+        <td>${formatDate(t.date)}</td>
+      </tr>
+    `).join('');
+
+    const html = `
+      <html dir="rtl" lang="ar">
+      <head>
+        <meta charset="utf-8" />
+        <style>
+          body { font-family: Arial, sans-serif; padding: 24px; color: #1F2937; }
+          h1 { color: #059669; text-align: center; margin-bottom: 4px; }
+          .subtitle { text-align: center; color: #6B7280; margin-bottom: 20px; }
+          .summary { display: flex; justify-content: space-around; background: #ECFDF5; padding: 15px; border-radius: 10px; margin-bottom: 20px; border: 1px solid #A7F3D0; }
+          .box { text-align: center; }
+          .box-title { font-size: 13px; color: #4B5563; }
+          .box-val { font-size: 20px; font-weight: bold; color: #065F46; margin-top: 4px; }
+          table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+          th, td { border: 1px solid #E5E7EB; padding: 10px; text-align: right; font-size: 14px; }
+          th { background-color: #10B981; color: white; }
+        </style>
+      </head>
+      <body>
+        <h1>تقرير مدير محفظة مصروفاتي</h1>
+        <div class="subtitle">${cycleData.title} | من ${formatDate(cycleData.startDate)}</div>
+        <div class="summary">
+          <div class="box"><div class="box-title">إجمالي الميزانية</div><div class="box-val">${cycleData.totalBudget} EGP</div></div>
+          <div class="box"><div class="box-title">إجمالي المصروف</div><div class="box-val" style="color:#DC2626;">${spent} EGP</div></div>
+          <div class="box"><div class="box-title">المتبقي</div><div class="box-val">${rem} EGP</div></div>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>البيان / الوصف</th>
+              <th>المبلغ</th>
+              <th>التاريخ والوقت</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rowsHtml || '<tr><td colspan="3" style="text-align:center;">لا توجد عمليات مسجلة</td></tr>'}
+          </tbody>
+        </table>
+      </body>
+      </html>
+    `;
+
+    try {
+      const { uri } = await Print.printToFileAsync({ html });
+      await Sharing.shareAsync(uri, { UTI: '.pdf', mimeType: 'application/pdf' });
+    } catch (error) {
+      Alert.alert('خطأ', 'تعذر إنشاء ملف PDF');
+    }
+  };
+
+  if (loadingAuth) {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator size="large" color="#10B981" />
+      </View>
+    );
+  }
+
+  // شاشة تسجيل الدخول
+  if (!user) {
+    return (
+      <SafeAreaView style={styles.authContainer}>
+        <StatusBar barStyle="dark-content" backgroundColor="#F9FAFB" />
+        <View style={styles.authCard}>
+          <Text style={styles.appTitle}>مدير محفظة مصروفاتي</Text>
+          <Text style={styles.authSubtitle}>
+            {isRegister ? 'إنشاء حساب جديد لحفظ مصاريفك على السحابة' : 'سجل دخولك لمتابعة مصاريفك'}
+          </Text>
+
+          <TextInput
+            style={styles.input}
+            placeholder="البريد الإلكتروني (Gmail)"
+            value={email}
+            onChangeText={setEmail}
+            keyboardType="email-address"
+            autoCapitalize="none"
+          />
+          <TextInput
+            style={styles.input}
+            placeholder="كلمة المرور (6 أحرف على الأقل)"
+            value={password}
+            onChangeText={setPassword}
+            secureTextEntry
+          />
+
+          <TouchableOpacity style={styles.primaryBtn} onPress={handleAuth}>
+            <Text style={styles.primaryBtnText}>{isRegister ? 'إنشاء الحساب' : 'تسجيل الدخول'}</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity onPress={() => setIsRegister(!isRegister)} style={{ marginTop: 16 }}>
+            <Text style={styles.switchAuthText}>
+              {isRegister ? 'لديك حساب بالفعل؟ سجل دخولك' : 'مستخدم جديد؟ أنشئ حسابك الآن'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // الشاشة الرئيسية للتطبيق
+  return (
+    <SafeAreaView style={styles.container}>
+      <StatusBar barStyle="dark-content" backgroundColor="#F9FAFB" />
+
+      {/* الشريط العلوي */}
+      <View style={styles.header}>
+        <View>
+          <Text style={styles.headerTitle}>مدير محفظة مصروفاتي</Text>
+          <Text style={styles.syncText}>{syncStatus}</Text>
+        </View>
+        <View style={{ flexDirection: 'row', gap: 8 }}>
+          <TouchableOpacity style={styles.iconBtn} onPress={() => setArchiveModalVisible(true)}>
+            <Text style={styles.iconBtnText}>الأرشيف ({archives.length})</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.iconBtn, { backgroundColor: '#FEE2E2' }]} onPress={() => signOut(auth)}>
+            <Text style={[styles.iconBtnText, { color: '#DC2626' }]}>خروج</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {!currentCycle ? (
+        <View style={styles.emptyState}>
+          <Text style={styles.emptyTitle}>لا توجد دورة مصاريف نشطة حالياً</Text>
+          <Text style={styles.emptyDesc}>ابدأ دورة جديدة وحدد المبلغ الأساسي الذي معك</Text>
+          <TouchableOpacity style={styles.primaryBtn} onPress={() => setCycleModalVisible(true)}>
+            <Text style={styles.primaryBtnText}>+ بدء دورة جديدة</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <View style={{ flex: 1 }}>
+          {/* بطاقة الملخص المالي */}
+          <View style={styles.summaryCard}>
+            <View style={styles.cardTopRow}>
+              <Text style={styles.cycleName}>{currentCycle.title}</Text>
+              <TouchableOpacity onPress={() => exportToPDF(currentCycle)} style={styles.pdfBtn}>
+                <Text style={styles.pdfBtnText}>تصدير PDF</Text>
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.remainingLabel}>المتبقي معك الآن</Text>
+            <Text style={[styles.remainingAmount, remaining < 0 && { color: '#FCA5A5' }]}>
+              {remaining} <Text style={{ fontSize: 18 }}>EGP</Text>
+            </Text>
+
+            <Text style={styles.avgText}>
+              متوسط صرفك اليومي: {dailyAverage} EGP (منذ {daysPassed} يوم)
+            </Text>
+
+            <View style={styles.statsRow}>
+              <View style={styles.statBox}>
+                <Text style={styles.statLabel}>الميزانية الكلية</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Text style={styles.statValue}>{currentCycle.totalBudget} EGP</Text>
+                  <TouchableOpacity onPress={() => setAddFundsModalVisible(true)} style={styles.plusBadge}>
+                    <Text style={styles.plusBadgeText}>+</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              <View style={styles.statDivider} />
+
+              <View style={styles.statBox}>
+                <Text style={styles.statLabel}>إجمالي المصروف</Text>
+                <Text style={styles.statValue}>{totalSpent} EGP</Text>
+              </View>
+            </View>
+          </View>
+
+          {/* شريط التحكم في القائمة */}
+          <View style={styles.listHeader}>
+            <Text style={styles.listTitle}>سجل العمليات ({currentCycle.transactions.length})</Text>
+            <TouchableOpacity onPress={closeAndArchiveCycle}>
+              <Text style={styles.closeCycleText}>إنهاء وأرشفة الدورة</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* قائمة المصاريف */}
+          <FlatList
+            data={currentCycle.transactions}
+            keyExtractor={(item) => item.id}
+            contentContainerStyle={{ paddingBottom: 90 }}
+            ListEmptyComponent={
+              <Text style={styles.noTxText}>لم تسجل أي مصاريف بعد.. اضغط على الزر الأخضر بالأسفل للإضافة</Text>
+            }
+            renderItem={({ item }) => (
+              <TouchableOpacity
+                style={styles.txItem}
+                onPress={() => openEditExpense(item)}
+                onLongPress={() => deleteTransaction(item)}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.txDesc}>{item.description}</Text>
+                  <Text style={styles.txDate}>{formatDate(item.date)}</Text>
+                </View>
+                <View style={{ alignItems: 'flex-end' }}>
+                  <Text style={[styles.txAmount, item.type === 'income' ? styles.incomeText : styles.expenseText]}>
+                    {item.type === 'income' ? '+' : '-'}{item.amount} EGP
+                  </Text>
+                  <TouchableOpacity onPress={() => deleteTransaction(item)}>
+                    <Text style={styles.deleteMini}>حذف</Text>
+                  </TouchableOpacity>
+                </View>
+              </TouchableOpacity>
+            )}
+          />
+
+          {/* زر إضافة مصروف عائم */}
+          <TouchableOpacity
+            style={styles.fab}
+            onPress={() => {
+              setEditingExpenseId(null);
+              setExpenseAmount('');
+              setExpenseDesc('');
+              setExpenseModalVisible(true);
+            }}
+          >
+            <Text style={styles.fabText}>+ تسجيل مصروف</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* نافذة بدء دورة جديدة */}
+      <Modal visible={cycleModalVisible} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalBox}>
+            <Text style={styles.modalTitle}>بدء دورة مصاريف جديدة</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="اسم الدورة (اختياري، مثلاً: مصروف شهر 12)"
+              value={cycleTitleInput}
+              onChangeText={setCycleTitleInput}
+            />
+            <TextInput
+              style={styles.input}
+              placeholder="المبلغ الأساسي (بالأرقام الإنجليزية)"
+              value={initialBudgetInput}
+              onChangeText={setInitialBudgetInput}
+              keyboardType="numeric"
+            />
+            <View style={styles.modalBtns}>
+              <TouchableOpacity style={styles.cancelBtn} onPress={() => setCycleModalVisible(false)}>
+                <Text style={styles.cancelBtnText}>إلغاء</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.saveBtn} onPress={startNewCycle}>
+                <Text style={styles.saveBtnText}>بدء الدورة</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* نافذة إضافة أو تعديل مصروف */}
+      <Modal visible={expenseModalVisible} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalBox}>
+            <Text style={styles.modalTitle}>{editingExpenseId ? 'تعديل المصروف' : 'تسجيل مصروف جديد'}</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="المبلغ (مثلاً: 50)"
+              value={expenseAmount}
+              onChangeText={setExpenseAmount}
+              keyboardType="numeric"
+              autoFocus
+            />
+            <TextInput
+              style={styles.input}
+              placeholder="الوصف (مثلاً: مواصلات، قهوة، تصوير ورق...)"
+              value={expenseDesc}
+              onChangeText={setExpenseDesc}
+            />
+            <View style={styles.modalBtns}>
+              <TouchableOpacity style={styles.cancelBtn} onPress={() => setExpenseModalVisible(false)}>
+                <Text style={styles.cancelBtnText}>إلغاء</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.saveBtn} onPress={saveExpense}>
+                <Text style={styles.saveBtnText}>حفظ</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* نافذة تزويد الرصيد */}
+      <Modal visible={addFundsModalVisible} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalBox}>
+            <Text style={styles.modalTitle}>إضافة رصيد للدورة الحالية</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="المبلغ الإضافي"
+              value={extraFundsInput}
+              onChangeText={setExtraFundsInput}
+              keyboardType="numeric"
+              autoFocus
+            />
+            <TextInput
+              style={styles.input}
+              placeholder="ملاحظة (اختياري، مثلاً: تحويل إضافي)"
+              value={extraFundsNote}
+              onChangeText={setExtraFundsNote}
+            />
+            <View style={styles.modalBtns}>
+              <TouchableOpacity style={styles.cancelBtn} onPress={() => setAddFundsModalVisible(false)}>
+                <Text style={styles.cancelBtnText}>إلغاء</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.saveBtn} onPress={handleAddFunds}>
+                <Text style={styles.saveBtnText}>إضافة للرصيد</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* نافذة الأرشيف */}
+      <Modal visible={archiveModalVisible} animationType="slide">
+        <SafeAreaView style={styles.container}>
+          <View style={styles.header}>
+            <Text style={styles.headerTitle}>أرشيف الدورات السابقة</Text>
+            <TouchableOpacity style={styles.iconBtn} onPress={() => setArchiveModalVisible(false)}>
+              <Text style={styles.iconBtnText}>إغلاق</Text>
+            </TouchableOpacity>
+          </View>
+          <ScrollView contentContainerStyle={{ padding: 16 }}>
+            {archives.length === 0 ? (
+              <Text style={styles.noTxText}>لا توجد دورات مؤرشفة بعد</Text>
+            ) : (
+              archives.map((arc) => (
+                <View key={arc.id} style={styles.archiveCard}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Text style={styles.archiveTitle}>{arc.title}</Text>
+                    <TouchableOpacity onPress={() => exportToPDF(arc)} style={styles.pdfBtnSmall}>
+                      <Text style={{ color: '#059669', fontWeight: 'bold', fontSize: 12 }}>تصدير PDF</Text>
+                    </TouchableOpacity>
+                  </View>
+                  <Text style={styles.txDate}>من {formatDate(arc.startDate)} إلى {formatDate(arc.endDate)}</Text>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 }}>
+                    <Text style={styles.archiveStat}>الميزانية: {arc.totalBudget} EGP</Text>
+                    <Text style={styles.archiveStat}>المصروف: {arc.totalSpent} EGP</Text>
+                    <Text style={styles.archiveStat}>المتبقي: {arc.remaining} EGP</Text>
+                  </View>
+                </View>
+              ))
+            )}
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#F9FAFB' },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  authContainer: { flex: 1, backgroundColor: '#F3F4F6', justifyContent: 'center', padding: 20 },
+  authCard: { backgroundColor: '#FFFFFF', borderRadius: 16, padding: 24, elevation: 3 },
+  appTitle: { fontSize: 24, fontWeight: 'bold', color: '#059669', textAlign: 'center', marginBottom: 8 },
+  authSubtitle: { fontSize: 14, color: '#6B7280', textAlign: 'center', marginBottom: 20 },
+  input: {
+    backgroundColor: '#F9FAFB', borderWidth: 1, borderColor: '#D1D5DB', borderRadius: 10,
+    padding: 12, fontSize: 16, marginBottom: 12, textAlign: 'right', color: '#111827'
+  },
+  primaryBtn: { backgroundColor: '#10B981', padding: 14, borderRadius: 10, alignItems: 'center' },
+  primaryBtnText: { color: '#FFFFFF', fontSize: 16, fontWeight: 'bold' },
+  switchAuthText: { color: '#059669', textAlign: 'center', fontSize: 14, fontWeight: '600' },
+  header: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    padding: 16, backgroundColor: '#FFFFFF', borderBottomWidth: 1, borderBottomColor: '#E5E7EB'
+  },
+  headerTitle: { fontSize: 18, fontWeight: 'bold', color: '#111827' },
+  syncText: { fontSize: 12, color: '#10B981', marginTop: 2 },
+  iconBtn: { backgroundColor: '#ECFDF5', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8 },
+  iconBtnText: { color: '#059669', fontWeight: 'bold', fontSize: 13 },
+  emptyState: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24 },
+  emptyTitle: { fontSize: 20, fontWeight: 'bold', color: '#1F2937', marginBottom: 8 },
+  emptyDesc: { fontSize: 14, color: '#6B7280', textAlign: 'center', marginBottom: 24 },
+  summaryCard: {
+    backgroundColor: '#059669', margin: 16, borderRadius: 18, padding: 20, elevation: 4
+  },
+  cardTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+  cycleName: { color: '#D1FAE5', fontSize: 15, fontWeight: 'bold' },
+  pdfBtn: { backgroundColor: '#FFFFFF', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 },
+  pdfBtnText: { color: '#059669', fontWeight: 'bold', fontSize: 12 },
+  remainingLabel: { color: '#A7F3D0', fontSize: 14, textAlign: 'center' },
+  remainingAmount: { color: '#FFFFFF', fontSize: 38, fontWeight: 'bold', textAlign: 'center', marginVertical: 4 },
+  avgText: { color: '#ECFDF5', fontSize: 12, textAlign: 'center', marginBottom: 16 },
+  statsRow: {
+    flexDirection: 'row', backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 12, padding: 12
+  },
+  statBox: { flex: 1, alignItems: 'center' },
+  statDivider: { width: 1, backgroundColor: 'rgba(255,255,255,0.3)' },
+  statLabel: { color: '#D1FAE5', fontSize: 12, marginBottom: 4 },
+  statValue: { color: '#FFFFFF', fontSize: 16, fontWeight: 'bold' },
+  plusBadge: { backgroundColor: '#FFFFFF', width: 22, height: 22, borderRadius: 11, justifyContent: 'center', alignItems: 'center' },
+  plusBadgeText: { color: '#059669', fontWeight: 'bold', fontSize: 15 },
+  listHeader: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingHorizontal: 16, marginBottom: 8
+  },
+  listTitle: { fontSize: 16, fontWeight: 'bold', color: '#374151' },
+  closeCycleText: { color: '#DC2626', fontSize: 13, fontWeight: '600' },
+  noTxText: { textAlign: 'center', color: '#9CA3AF', marginTop: 40, paddingHorizontal: 20 },
+  txItem: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    backgroundColor: '#FFFFFF', marginHorizontal: 16, marginBottom: 10, padding: 14,
+    borderRadius: 12, borderWidth: 1, borderColor: '#F3F4F6'
+  },
+  txDesc: { fontSize: 16, fontWeight: '600', color: '#1F2937', textAlign: 'right' },
+  txDate: { fontSize: 12, color: '#9CA3AF', marginTop: 4, textAlign: 'right' },
+  txAmount: { fontSize: 16, fontWeight: 'bold' },
+  expenseText: { color: '#DC2626' },
+  incomeText: { color: '#059669' },
+  deleteMini: { color: '#9CA3AF', fontSize: 11, marginTop: 4 },
+  fab: {
+    position: 'absolute', bottom: 20, left: 20, right: 20, backgroundColor: '#10B981',
+    padding: 16, borderRadius: 14, alignItems: 'center', elevation: 5
+  },
+  fabText: { color: '#FFFFFF', fontSize: 17, fontWeight: 'bold' },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 20 },
+  modalBox: { backgroundColor: '#FFFFFF', borderRadius: 16, padding: 20 },
+  modalTitle: { fontSize: 18, fontWeight: 'bold', color: '#111827', marginBottom: 16, textAlign: 'center' },
+  modalBtns: { flexDirection: 'row', gap: 10, marginTop: 8 },
+  cancelBtn: { flex: 1, backgroundColor: '#F3F4F6', padding: 12, borderRadius: 10, alignItems: 'center' },
+  cancelBtnText: { color: '#4B5563', fontWeight: 'bold' },
+  saveBtn: { flex: 1, backgroundColor: '#10B981', padding: 12, borderRadius: 10, alignItems: 'center' },
+  saveBtnText: { color: '#FFFFFF', fontWeight: 'bold' },
+  archiveCard: {
+    backgroundColor: '#FFFFFF', padding: 16, borderRadius: 12, marginBottom: 12,
+    borderWidth: 1, borderColor: '#E5E7EB'
+  },
+  archiveTitle: { fontSize: 16, fontWeight: 'bold', color: '#111827' },
+  pdfBtnSmall: { backgroundColor: '#ECFDF5', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6 },
+  archiveStat: { fontSize: 13, fontWeight: '600', color: '#374151' }
+});
