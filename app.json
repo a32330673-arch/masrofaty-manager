@@ -12,6 +12,16 @@
         "backgroundColor": "#10B981"
       }
     },
+    "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "kotlinVersion": "1.9.25"
+          }
+        }
+      ]
+    ],
     "sdkVersion": "52.0.0",
     "platforms": [
       "ios",
