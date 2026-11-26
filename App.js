@@ -6,40 +6,16 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
-import { initializeApp } from 'firebase/app';
-import {
-  getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword,
-  onAuthStateChanged, signOut
-} from 'firebase/auth';
-import {
-  getFirestore, doc, setDoc, getDoc
-} from 'firebase/firestore';
 
-// مفاتيح الربط الخاصة بمشروعك على Firebase
-const firebaseConfig = {
-  apiKey: "AIzaSyDguCNV16AkNvdD9nV1_M2NjqK8770dIDc",
-  authDomain: "masrofaty-manager.firebaseapp.com",
-  projectId: "masrofaty-manager",
-  storageBucket: "masrofaty-manager.firebasestorage.app",
-  messagingSenderId: "106571768740",
-  appId: "1:106571768740:web:611d52b91c3d3a95a37731"
-};
-
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
+const STORAGE_KEY = 'masrofaty_manager_local_v1';
 
 export default function App() {
-  const [user, setUser] = useState(null);
-  const [loadingAuth, setLoadingAuth] = useState(true);
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [isRegister, setIsRegister] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   // بيانات الدورة الحالية والأرشيف
   const [currentCycle, setCurrentCycle] = useState(null);
   const [archives, setArchives] = useState([]);
-  const [syncStatus, setSyncStatus] = useState('متصل بالسحابة');
+  const [syncStatus, setSyncStatus] = useState('محفوظ محلياً على الجهاز');
 
   // النوافذ المنبثقة (Modals)
   const [cycleModalVisible, setCycleModalVisible] = useState(false);
@@ -59,68 +35,40 @@ export default function App() {
   const [expenseDesc, setExpenseDesc] = useState('');
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      setUser(currentUser);
-      if (currentUser) {
-        await loadData(currentUser.uid);
-      }
-      setLoadingAuth(false);
-    });
-    return unsubscribe;
+    loadLocalData();
   }, []);
 
-  // تحميل البيانات من الهاتف أولاً ثم المزامنة مع السحابة
-  const loadData = async (uid) => {
+  // تحميل البيانات من الهاتف
+  const loadLocalData = async () => {
     try {
-      const localData = await AsyncStorage.getItem(`wallet_data_${uid}`);
+      const localData = await AsyncStorage.getItem(STORAGE_KEY);
       if (localData) {
         const parsed = JSON.parse(localData);
         setCurrentCycle(parsed.currentCycle || null);
         setArchives(parsed.archives || []);
       }
-      const docRef = doc(db, 'users', uid);
-      const docSnap = await getDoc(docRef);
-      if (docSnap.exists()) {
-        const cloudData = docSnap.data();
-        setCurrentCycle(cloudData.currentCycle || null);
-        setArchives(cloudData.archives || []);
-        await AsyncStorage.setItem(`wallet_data_${uid}`, JSON.stringify(cloudData));
-      }
-      setSyncStatus('متزامن مع السحابة');
+      setSyncStatus('محفوظ محلياً على الجهاز');
     } catch (e) {
-      setSyncStatus('وضع بدون إنترنت (محفوظ محلياً)');
+      setSyncStatus('تعذر قراءة التخزين المحلي');
+    } finally {
+      setLoading(false);
     }
   };
 
-  // حفظ البيانات محلياً وفي Firebase
+  // حفظ البيانات محلياً
   const saveData = async (newCycle, newArchives) => {
-    if (!user) return;
-    const payload = { currentCycle: newCycle, archives: newArchives, updatedAt: new Date().toISOString() };
+    const payload = {
+      currentCycle: newCycle,
+      archives: newArchives,
+      updatedAt: new Date().toISOString()
+    };
     setCurrentCycle(newCycle);
     setArchives(newArchives);
-    await AsyncStorage.setItem(`wallet_data_${user.uid}`, JSON.stringify(payload));
     try {
-      setSyncStatus('جاري المزامنة...');
-      await setDoc(doc(db, 'users', user.uid), payload);
-      setSyncStatus('متزامن مع السحابة');
+      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+      setSyncStatus('محفوظ محلياً على الجهاز');
     } catch (e) {
-      setSyncStatus('محفوظ محلياً (سيتم الرفع عند توفر نت)');
-    }
-  };
-
-  const handleAuth = async () => {
-    if (!email.trim() || !password.trim()) {
-      Alert.alert('تنبيه', 'من فضلك اكتب البريد الإلكتروني وكلمة المرور');
-      return;
-    }
-    try {
-      if (isRegister) {
-        await createUserWithEmailAndPassword(auth, email.trim(), password);
-      } else {
-        await signInWithEmailAndPassword(auth, email.trim(), password);
-      }
-    } catch (error) {
-      Alert.alert('خطأ في الدخول', 'تأكد من صحة البريد الإلكتروني وكلمة المرور (6 أحرف على الأقل)');
+      setSyncStatus('خطأ أثناء الحفظ المحلي');
     }
   };
 
@@ -336,52 +284,11 @@ export default function App() {
     }
   };
 
-  if (loadingAuth) {
+  if (loading) {
     return (
       <View style={styles.center}>
         <ActivityIndicator size="large" color="#10B981" />
       </View>
-    );
-  }
-
-  // شاشة تسجيل الدخول
-  if (!user) {
-    return (
-      <SafeAreaView style={styles.authContainer}>
-        <StatusBar barStyle="dark-content" backgroundColor="#F9FAFB" />
-        <View style={styles.authCard}>
-          <Text style={styles.appTitle}>مدير محفظة مصروفاتي</Text>
-          <Text style={styles.authSubtitle}>
-            {isRegister ? 'إنشاء حساب جديد لحفظ مصاريفك على السحابة' : 'سجل دخولك لمتابعة مصاريفك'}
-          </Text>
-
-          <TextInput
-            style={styles.input}
-            placeholder="البريد الإلكتروني (Gmail)"
-            value={email}
-            onChangeText={setEmail}
-            keyboardType="email-address"
-            autoCapitalize="none"
-          />
-          <TextInput
-            style={styles.input}
-            placeholder="كلمة المرور (6 أحرف على الأقل)"
-            value={password}
-            onChangeText={setPassword}
-            secureTextEntry
-          />
-
-          <TouchableOpacity style={styles.primaryBtn} onPress={handleAuth}>
-            <Text style={styles.primaryBtnText}>{isRegister ? 'إنشاء الحساب' : 'تسجيل الدخول'}</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity onPress={() => setIsRegister(!isRegister)} style={{ marginTop: 16 }}>
-            <Text style={styles.switchAuthText}>
-              {isRegister ? 'لديك حساب بالفعل؟ سجل دخولك' : 'مستخدم جديد؟ أنشئ حسابك الآن'}
-            </Text>
-          </TouchableOpacity>
-        </View>
-      </SafeAreaView>
     );
   }
 
@@ -396,14 +303,9 @@ export default function App() {
           <Text style={styles.headerTitle}>مدير محفظة مصروفاتي</Text>
           <Text style={styles.syncText}>{syncStatus}</Text>
         </View>
-        <View style={{ flexDirection: 'row', gap: 8 }}>
-          <TouchableOpacity style={styles.iconBtn} onPress={() => setArchiveModalVisible(true)}>
-            <Text style={styles.iconBtnText}>الأرشيف ({archives.length})</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.iconBtn, { backgroundColor: '#FEE2E2' }]} onPress={() => signOut(auth)}>
-            <Text style={[styles.iconBtnText, { color: '#DC2626' }]}>خروج</Text>
-          </TouchableOpacity>
-        </View>
+        <TouchableOpacity style={styles.iconBtn} onPress={() => setArchiveModalVisible(true)}>
+          <Text style={styles.iconBtnText}>الأرشيف ({archives.length})</Text>
+        </TouchableOpacity>
       </View>
 
       {!currentCycle ? (
@@ -639,17 +541,13 @@ export default function App() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F9FAFB' },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  authContainer: { flex: 1, backgroundColor: '#F3F4F6', justifyContent: 'center', padding: 20 },
-  authCard: { backgroundColor: '#FFFFFF', borderRadius: 16, padding: 24, elevation: 3 },
   appTitle: { fontSize: 24, fontWeight: 'bold', color: '#059669', textAlign: 'center', marginBottom: 8 },
-  authSubtitle: { fontSize: 14, color: '#6B7280', textAlign: 'center', marginBottom: 20 },
   input: {
     backgroundColor: '#F9FAFB', borderWidth: 1, borderColor: '#D1D5DB', borderRadius: 10,
     padding: 12, fontSize: 16, marginBottom: 12, textAlign: 'right', color: '#111827'
   },
   primaryBtn: { backgroundColor: '#10B981', padding: 14, borderRadius: 10, alignItems: 'center' },
   primaryBtnText: { color: '#FFFFFF', fontSize: 16, fontWeight: 'bold' },
-  switchAuthText: { color: '#059669', textAlign: 'center', fontSize: 14, fontWeight: '600' },
   header: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     padding: 16, backgroundColor: '#FFFFFF', borderBottomWidth: 1, borderBottomColor: '#E5E7EB'
