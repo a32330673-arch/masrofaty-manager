@@ -2,6 +2,7 @@
   "expo": {
     "name": "مدير محفظة مصروفاتي",
     "slug": "masrofaty-manager",
+    "owner": "ahmedn0aman-team",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
