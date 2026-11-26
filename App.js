@@ -9,23 +9,19 @@ import * as Sharing from 'expo-sharing';
 
 const STORAGE_KEY = 'masrofaty_manager_local_v1';
 const CATEGORIES = ['مواصلات', 'أكل', 'فواتير', 'إيجار', 'أخرى'];
-const MONTHS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 
 export default function App() {
   const [loading, setLoading] = useState(true);
 
-  // بيانات الدورة الحالية والأرشيف
   const [currentCycle, setCurrentCycle] = useState(null);
   const [archives, setArchives] = useState([]);
   const [syncStatus, setSyncStatus] = useState('محفوظ محلياً على الجهاز');
 
-  // النوافذ المنبثقة (Modals)
   const [cycleModalVisible, setCycleModalVisible] = useState(false);
   const [expenseModalVisible, setExpenseModalVisible] = useState(false);
   const [addFundsModalVisible, setAddFundsModalVisible] = useState(false);
   const [archiveModalVisible, setArchiveModalVisible] = useState(false);
 
-  // مدخلات بدء الدورة + تاريخ البداية (افتراضي اليوم)
   const now = new Date();
   const [initialBudgetInput, setInitialBudgetInput] = useState('');
   const [cycleTitleInput, setCycleTitleInput] = useState('');
@@ -33,11 +29,9 @@ export default function App() {
   const [cycleMonth, setCycleMonth] = useState(now.getMonth() + 1);
   const [cycleYear, setCycleYear] = useState(now.getFullYear());
 
-  // مدخلات تزويد الرصيد
   const [extraFundsInput, setExtraFundsInput] = useState('');
   const [extraFundsNote, setExtraFundsNote] = useState('');
 
-  // مدخلات إضافة / تعديل مصروف (قسم + تفاصيل فاضية)
   const [editingExpenseId, setEditingExpenseId] = useState(null);
   const [expenseAmount, setExpenseAmount] = useState('');
   const [expenseCategory, setExpenseCategory] = useState('مواصلات');
@@ -81,12 +75,7 @@ export default function App() {
 
   const formatDate = (isoString) => {
     const d = new Date(isoString);
-    return `${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear()} - ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
-  };
-
-  const formatShortDate = (isoString) => {
-    const d = new Date(isoString);
-    return `${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear()}`;
+    return `${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear()} -${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`; };  const formatShortDate = (isoString) => { const d = new Date(isoString); return `${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear()}`;
   };
 
   const openCycleModal = () => {
@@ -130,7 +119,6 @@ export default function App() {
     if (cycleDay > maxDay) setCycleDay(maxDay);
   };
 
-  // بدء دورة جديدة بالتاريخ المختار
   const startNewCycle = () => {
     const budget = parseFloat(initialBudgetInput);
     if (isNaN(budget) || budget <= 0) {
@@ -151,7 +139,6 @@ export default function App() {
     setCycleModalVisible(false);
   };
 
-  // تزويد الرصيد في منتصف الدورة
   const handleAddFunds = () => {
     const amount = parseFloat(extraFundsInput);
     if (isNaN(amount) || amount <= 0) {
@@ -178,13 +165,11 @@ export default function App() {
     setAddFundsModalVisible(false);
   };
 
-  // بناء عنوان واضح للعملية من القسم والتفاصيل
   const buildExpenseLabel = (category, details) => {
     const cleanDetails = (details || '').trim();
-    return cleanDetails ? `${category} - ${cleanDetails}` : category;
+    return cleanDetails ? `${category} -${cleanDetails}` : category;
   };
 
-  // حفظ مصروف جديد أو تعديل مصروف حالي
   const saveExpense = () => {
     const amount = parseFloat(expenseAmount);
     if (isNaN(amount) || amount <= 0) {
@@ -258,13 +243,11 @@ export default function App() {
     ]);
   };
 
-  // الحسابات المالية للدورة الحالية
   const totalSpent = currentCycle
     ? currentCycle.transactions.filter(t => t.type === 'expense').reduce((sum, t) => sum + t.amount, 0)
     : 0;
   const remaining = currentCycle ? currentCycle.totalBudget - totalSpent : 0;
 
-  // تجميع المصاريف حسب الأقسام
   const categoryTotals = currentCycle
     ? CATEGORIES.map(cat => {
         const sum = currentCycle.transactions
@@ -274,13 +257,11 @@ export default function App() {
       }).filter(c => c.total > 0)
     : [];
 
-  // حساب متوسط الصرف اليومي
   const daysPassed = currentCycle
     ? Math.max(1, Math.ceil((new Date() - new Date(currentCycle.startDate)) / (1000 * 60 * 60 * 24)))
     : 1;
   const dailyAverage = (totalSpent / daysPassed).toFixed(1);
 
-  // إغلاق الدورة وأرشفتها
   const closeAndArchiveCycle = () => {
     Alert.alert(
       'إنهاء وأرشفة الدورة',
@@ -303,7 +284,6 @@ export default function App() {
     );
   };
 
-  // تصدير التقرير بصيغة PDF
   const exportToPDF = async (cycleData) => {
     if (!cycleData) return;
     const spent = cycleData.transactions.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
@@ -311,7 +291,7 @@ export default function App() {
 
     const rowsHtml = cycleData.transactions.map(t => `
       <tr>
-        <td>${t.description} ${t.type === 'income' ? '(إضافة رصيد +)' : ''}</td>
+        <td>${t.description}${t.type === 'income' ? '(إضافة رصيد +)' : ''}</td>
         <td style="color: ${t.type === 'income' ? '#059669' : '#DC2626'}; font-weight: bold;">
           ${t.type === 'income' ? '+' : '-'}${t.amount} EGP
         </td>
@@ -338,113 +318,6 @@ export default function App() {
       </head>
       <body>
         <h1>تقرير مدير محفظة مصروفاتي</h1>
-        <div class="subtitle">${cycleData.title} | من ${formatShortDate(cycleData.startDate)}</div>
+        <div class="subtitle">${cycleData.title} \vert{} من ${formatShortDate(cycleData.startDate)}</div>
         <div class="summary">
-          <div class="box"><div class="box-title">إجمالي الميزانية</div><div class="box-val">${cycleData.totalBudget} EGP</div></div>
-          <div class="box"><div class="box-title">إجمالي المصروف</div><div class="box-val" style="color:#DC2626;">${spent} EGP</div></div>
-          <div class="box"><div class="box-title">المتبقي</div><div class="box-val">${rem} EGP</div></div>
-        </div>
-        <table>
-          <thead>
-            <tr>
-              <th>البيان / الوصف</th>
-              <th>المبلغ</th>
-              <th>التاريخ والوقت</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${rowsHtml || '<tr><td colspan="3" style="text-align:center;">لا توجد عمليات مسجلة</td></tr>'}
-          </tbody>
-        </table>
-      </body>
-      </html>
-    `;
-
-    try {
-      const { uri } = await Print.printToFileAsync({ html });
-      await Sharing.shareAsync(uri, { UTI: '.pdf', mimeType: 'application/pdf' });
-    } catch (error) {
-      Alert.alert('خطأ', 'تعذر إنشاء ملف PDF');
-    }
-  };
-
-  if (loading) {
-    return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color="#10B981" />
-      </View>
-    );
-  }
-
-  return (
-    <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="dark-content" backgroundColor="#F9FAFB" />
-
-      {/* الشريط العلوي */}
-      <View style={styles.header}>
-        <View>
-          <Text style={styles.headerTitle}>مدير محفظة مصروفاتي</Text>
-          <Text style={styles.syncText}>{syncStatus}</Text>
-        </View>
-        <TouchableOpacity style={styles.iconBtn} onPress={() => setArchiveModalVisible(true)}>
-          <Text style={styles.iconBtnText}>الأرشيف ({archives.length})</Text>
-        </TouchableOpacity>
-      </View>
-
-      {!currentCycle ? (
-        <View style={styles.emptyState}>
-          <Text style={styles.emptyTitle}>لا توجد دورة مصاريف نشطة حالياً</Text>
-          <Text style={styles.emptyDesc}>ابدأ دورة جديدة وحدد تاريخ البداية والمبلغ الأساسي</Text>
-          <TouchableOpacity style={styles.primaryBtn} onPress={openCycleModal}>
-            <Text style={styles.primaryBtnText}>+ بدء دورة جديدة</Text>
-          </TouchableOpacity>
-        </View>
-      ) : (
-        <View style={{ flex: 1 }}>
-          {/* بطاقة الملخص المالي */}
-          <View style={styles.summaryCard}>
-            <View style={styles.cardTopRow}>
-              <Text style={styles.cycleName}>
-                {currentCycle.title} • تبدأ {formatShortDate(currentCycle.startDate)}
-              </Text>
-              <TouchableOpacity onPress={() => exportToPDF(currentCycle)} style={styles.pdfBtn}>
-                <Text style={styles.pdfBtnText}>تصدير PDF</Text>
-              </TouchableOpacity>
-            </View>
-
-            <Text style={styles.remainingLabel}>المتبقي معك الآن</Text>
-            <Text style={[styles.remainingAmount, remaining < 0 && { color: '#FCA5A5' }]}>
-              {remaining} <Text style={{ fontSize: 18 }}>EGP</Text>
-            </Text>
-
-            <Text style={styles.avgText}>
-              متوسط صرفك اليومي: {dailyAverage} EGP (منذ {daysPassed} يوم)
-            </Text>
-
-            <View style={styles.statsRow}>
-              <View style={styles.statBox}>
-                <Text style={styles.statLabel}>الميزانية الكلية</Text>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                  <Text style={styles.statValue}>{currentCycle.totalBudget} EGP</Text>
-                  <TouchableOpacity onPress={() => setAddFundsModalVisible(true)} style={styles.plusBadge}>
-                    <Text style={styles.plusBadgeText}>+</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-
-              <View style={styles.statDivider} />
-
-              <View style={styles.statBox}>
-                <Text style={styles.statLabel}>إجمالي المصروف</Text>
-                <Text style={styles.statValue}>{totalSpent} EGP</Text>
-              </View>
-            </View>
-          </View>
-
-          {/* ملخص الصرف حسب الأقسام */}
-          {categoryTotals.length > 0 && (
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              style
- 
+          <div class="box"><div class="box-title">إجمالي الميزانية</div><div
