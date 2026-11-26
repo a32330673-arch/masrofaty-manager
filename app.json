@@ -10,6 +10,16 @@
       "adaptiveIcon": {
         "backgroundColor": "#10B981"
       }
+    },
+    "sdkVersion": "52.0.0",
+    "platforms": [
+      "ios",
+      "android"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "12c4dedf-21ee-4182-ae0b-5f4496cecdc4"
+      }
     }
   }
 }
